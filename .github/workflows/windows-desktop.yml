@@ -45,7 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test
       - name: Build portable Windows app
-        run: npm run desktop:package
+        run: node scripts/ci-desktop.mjs build
       - name: Extract the downloadable archive
         run: |
           $archive = Get-ChildItem release/Relaywork-*-windows-x64.zip | Select-Object -First 1
@@ -53,7 +53,7 @@ jobs:
       - name: Test the actual packaged executable
         env:
           RELAYWORK_DESKTOP_EXECUTABLE: ${{ github.workspace }}\release\download-test\Relaywork-win32-x64\relaywork.exe
-        run: npm run test:desktop
+        run: node scripts/ci-desktop.mjs test
       - name: Record application version
         id: version
         run: |
