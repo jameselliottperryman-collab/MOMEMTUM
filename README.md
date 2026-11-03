@@ -2,6 +2,12 @@
 
 A working local project-collaboration prototype, implemented in MOMEMTUM from the supplied Relaywork product brief. The interface uses the brief’s English pilot language and an original visual identity.
 
+## Download for Windows
+
+[**Download Relaywork for Windows 64-bit (.zip)**](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases/download/windows-desktop-v0.1.0-749fd67/Relaywork-0.1.0-windows-x64.zip)
+
+Extract the ZIP, open `Relaywork-win32-x64`, and run `relaywork.exe`. Keep the whole extracted folder together. This unsigned demo was built on Windows and its extracted executable passed the native workflow test, including reviewer permissions and persistence after restart. [Release page and checksum](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases/tag/windows-desktop-v0.1.0-749fd67).
+
 ## Run
 
 Requires **Node.js 24** (uses built-in `node:sqlite`) and npm.
@@ -106,7 +112,7 @@ Create a portable app for the **current operating system and architecture**:
 npm run desktop:package
 ```
 
-This builds Next.js standalone output, stages the shell and runtime files under `.desktop/app`, and packages them under `release/`. Linux additionally gets a compressed archive and SHA-256 checksum. Windows/macOS packaging should be run on the corresponding OS so traced native dependencies match that platform. Those builds are supported by the source configuration but have not been built or tested here. Signing, notarization, installers and store distribution remain separate work.
+This builds Next.js standalone output, stages the shell and runtime files under `.desktop/app`, and packages them under `release/`. Linux gets a compressed tar archive; Windows gets a ZIP. Both include SHA-256 checksums. Windows/macOS packaging should be run on the corresponding OS so traced native dependencies match that platform. Windows x64 has been built and tested in GitHub Actions. macOS remains unbuilt and untested. Signing, notarization, installers and store distribution remain separate work.
 
 ### Desktop behavior
 
