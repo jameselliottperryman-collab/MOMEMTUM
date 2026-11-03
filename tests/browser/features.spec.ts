@@ -504,3 +504,46 @@ test("documents accept pasted and dropped image files", async ({ page }) => {
   ).toHaveValue("Image gesture imports");
   await expect(page.locator(".document-image img")).toHaveCount(2);
 });
+
+test("attachment size limits survive the desktop request proxy", async ({
+  playwright,
+}) => {
+  const client = await playwright.request.newContext({
+    baseURL: "http://localhost:3001",
+    extraHTTPHeaders: { Origin: "http://localhost:3001" },
+  });
+  await client.get("/api/state");
+  const bytes = Buffer.alloc(11 * 1024 * 1024);
+  bytes.write("%PDF-1.4\n");
+  const upload = await client.post("/api/files", {
+    multipart: {
+      taskId: "RW-101",
+      file: {
+        name: "large-review.pdf",
+        mimeType: "application/pdf",
+        buffer: bytes,
+      },
+    },
+  });
+  expect(upload.status()).toBe(201);
+  const file = await upload.json();
+  expect(file.size).toBe(bytes.length);
+  const download = await client.get("/api/files/" + file.id);
+  expect(download.status()).toBe(200);
+  expect((await download.body()).equals(bytes)).toBe(true);
+  expect((await client.delete("/api/files/" + file.id)).ok()).toBe(true);
+  const oversized = Buffer.alloc(26 * 1024 * 1024);
+  oversized.write("%PDF-1.4\n");
+  const rejected = await client.post("/api/files", {
+    multipart: {
+      taskId: "RW-101",
+      file: {
+        name: "too-large.pdf",
+        mimeType: "application/pdf",
+        buffer: oversized,
+      },
+    },
+  });
+  expect(rejected.status()).toBe(413);
+  await client.dispose();
+});
