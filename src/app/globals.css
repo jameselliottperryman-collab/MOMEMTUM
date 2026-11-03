@@ -3396,3 +3396,16 @@ h1 {
 .project-nav > button.active {
   color: #684d9d;
 }
+/* Keep navigation and account switching reachable on short desktop screens. */
+.sidebar {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+@media (max-height: 850px) {
+  .sidebar-bottom {
+    padding-top: 16px;
+  }
+  .team-note {
+    display: none;
+  }
+}

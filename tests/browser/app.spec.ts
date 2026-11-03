@@ -252,3 +252,22 @@ test("automated accessibility checks on board and task dialog", async ({
     })),
   ).toEqual([]);
 });
+
+test("account switching stays reachable on short desktop screens", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "Brand launch", exact: true }),
+  ).toBeVisible();
+  const account = page.locator(".account-button");
+  await account.scrollIntoViewIfNeeded();
+  await expect(account).toBeInViewport();
+  await account.click();
+  await expect(
+    page
+      .locator(".account-popover")
+      .getByRole("button", { name: /Jordan Lee/ }),
+  ).toBeInViewport();
+});
