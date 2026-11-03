@@ -179,7 +179,7 @@ test(
       await expect(page.locator(".account-button")).toBeVisible();
       await expect(page.locator(".account-popover")).not.toBeVisible();
       await page.screenshot({
-        path: "/tmp/relaywork-native-desktop.png",
+        path: join(profile, "native-desktop.png"),
         fullPage: true,
       });
       await app.close();

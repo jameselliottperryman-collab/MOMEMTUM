@@ -1,7 +1,7 @@
 import { packager } from "@electron/packager";
 import { downloadArtifact } from "@electron/get";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, basename } from "node:path";
+import { dirname, join, basename, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 const pkg = JSON.parse(await readFile("package.json", "utf8"));
@@ -36,14 +36,41 @@ const paths = await packager({
   overwrite: true,
   prune: false,
 });
+let archive;
+if (process.platform === "win32") {
+  archive = join(
+    "release",
+    `Relaywork-${pkg.version}-windows-${process.arch}.zip`,
+  );
+  // Invoke the native Windows ZIP tool with paths passed as data, never shell code.
+  execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Compress-Archive -LiteralPath $env:RELAYWORK_ARCHIVE_SOURCE -DestinationPath $env:RELAYWORK_ARCHIVE_OUTPUT -Force",
+    ],
+    {
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        RELAYWORK_ARCHIVE_SOURCE: resolve(paths[0]),
+        RELAYWORK_ARCHIVE_OUTPUT: resolve(archive),
+      },
+    },
+  );
+}
 if (process.platform === "linux") {
-  const archive = join(
+  archive = join(
     "release",
     `Relaywork-${pkg.version}-linux-${process.arch}.tar.gz`,
   );
   execFileSync("tar", ["-czf", archive, "-C", "release", basename(paths[0])], {
     stdio: "inherit",
   });
+}
+if (archive) {
   const hash = createHash("sha256")
     .update(await readFile(archive))
     .digest("hex");

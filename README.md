@@ -143,3 +143,11 @@ To test the packaged Linux executable with the same workflow:
 ```sh
 RELAYWORK_DESKTOP_EXECUTABLE="$PWD/release/Relaywork-linux-x64/relaywork" npm run test:desktop
 ```
+
+### Downloadable Windows build on GitHub
+
+The **Windows desktop download** workflow builds on a Windows runner, tests the packaged `relaywork.exe`, and attaches a ZIP and SHA-256 checksum to a GitHub prerelease. It runs after relevant pushes to `main`, or manually from the repository’s Actions tab. Each published tag contains the source commit, so previous downloads remain identifiable.
+
+Open [GitHub releases](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases) and select the **Relaywork … Windows desktop demo** entry. Download `Relaywork-0.1.0-windows-x64.zip`, choose **Extract all**, open the extracted `Relaywork-win32-x64` folder, and run `relaywork.exe`. The complete folder is required. These are unsigned demonstration builds for Windows x64; do not disable Windows security protections to run them. If a build or native test fails, the workflow does not publish a download.
+
+The native Windows packaging command now creates its ZIP and checksum automatically; it is still built and tested on Windows, not cross-compiled from Linux.
