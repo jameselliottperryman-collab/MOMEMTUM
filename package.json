@@ -1,0 +1,37 @@
+{
+  "name": "relaywork",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "RELAYWORK_DEMO=1 next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:e2e": "playwright test",
+    "desktop:build": "node scripts/build-desktop.mjs",
+    "desktop:start": "electron desktop/main.cjs",
+    "desktop:package": "npm run desktop:build && node scripts/package-desktop.mjs",
+    "test:desktop": "node --test tests/desktop.test.mjs"
+  },
+  "dependencies": {
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/manrope": "^5.3.0",
+    "lucide-react": "^0.468.0",
+    "next": "^16.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@electron/get": "^5.1.0",
+    "@electron/packager": "^20.3.0",
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "electron": "^45.2.1",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3"
+  }
+}
