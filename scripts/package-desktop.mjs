@@ -27,6 +27,11 @@ const paths = await packager({
   executableName: "relaywork",
   appBundleId: "app.relaywork.desktop",
   appVersion: pkg.version,
+  win32metadata: {
+    CompanyName: "Relaywork",
+    ProductName: "Relaywork",
+    FileDescription: "Relaywork desktop demo",
+  },
   platform: process.platform,
   arch: process.arch,
   electronVersion: electron.version,
