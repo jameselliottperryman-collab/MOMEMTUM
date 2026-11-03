@@ -11,61 +11,18 @@ import {
   csvCell,
 } from "@/lib/model";
 import type { State, Task, Project, Grant } from "@/lib/model";
+import {
+  ApiError as HttpError,
+  fail,
+  str,
+  date,
+  project,
+  task,
+} from "@/lib/access";
+import { featureGet, featureMutation } from "@/lib/feature-api";
+import { deliverReminders } from "@/lib/features";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-class HttpError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-function fail(code: number, message: string): never {
-  throw new HttpError(code, message);
-}
-function str(
-  value: unknown,
-  name: string,
-  max = 3000,
-  required = false,
-): string {
-  if (
-    typeof value !== "string" ||
-    value.length > max ||
-    (required && !value.trim())
-  )
-    fail(422, `Enter a valid ${name}.`);
-  return value.trim();
-}
-function date(value: unknown) {
-  const v = str(value, "due date", 10);
-  if (
-    v &&
-    (!/^\d{4}-\d{2}-\d{2}$/.test(v) ||
-      new Date(v).toISOString().slice(0, 10) !== v)
-  )
-    fail(422, "Use a valid due date.");
-  return v;
-}
-function project(
-  s: State,
-  id: string,
-  user: string,
-  level: Grant = "View",
-): Project {
-  const p = s.projects.find((p) => p.id === id);
-  if (!p || !grantFor(s, user, p)) fail(404, "This project is unavailable.");
-  if (!can(s, user, p, level))
-    fail(403, `You need ${level.toLowerCase()} access for this action.`);
-  return p;
-}
-function task(s: State, id: string, user: string, level: Grant = "View") {
-  const t = s.tasks.find((t) => t.id === id);
-  if (!t) fail(404, "This task is unavailable.");
-  project(s, t.projectId, user, level);
-  return t;
-}
 function activity(s: State, t: Task, user: string, text: string) {
   s.activity.push({
     id: randomUUID(),
@@ -167,7 +124,10 @@ async function handle(req: NextRequest, method: string) {
       token = newSession(user);
     }
     const body =
-      method === "GET"
+      method === "GET" ||
+      (method === "DELETE" &&
+        (!req.headers.get("content-type") ||
+          req.headers.get("content-length") === "0"))
         ? {}
         : await req.json().catch(() => fail(400, "Invalid JSON."));
     if (
@@ -193,7 +153,16 @@ async function handle(req: NextRequest, method: string) {
     const actor = user;
     if (method === "GET" && path[0] === "state") {
       const res = NextResponse.json(
-        { ...visibleState(readState(), actor), demo: true },
+        {
+          ...visibleState(
+            mutate((s) => {
+              deliverReminders(s);
+              return s;
+            }),
+            actor,
+          ),
+          demo: true,
+        },
         { headers: { "Cache-Control": "private, no-store" } },
       );
       if (token)
@@ -212,7 +181,7 @@ async function handle(req: NextRequest, method: string) {
       const rows = [
         ["Title", "Description", "Status", "Priority", "Due date", "Tags"],
         ...s.tasks
-          .filter((t) => t.projectId === path[1] && !t.archived)
+          .filter((t) => t.projectId === path[1] && !t.archived && !t.deletedAt)
           .map((t) => [
             t.title,
             t.description,
@@ -232,7 +201,17 @@ async function handle(req: NextRequest, method: string) {
         },
       );
     }
+    if (method === "GET") {
+      const extra = featureGet(readState(), actor, path);
+      if (extra !== undefined)
+        return NextResponse.json(extra, {
+          headers: { "Cache-Control": "private, no-store" },
+        });
+    }
     const result = mutate((s) => {
+      const extra = featureMutation(s, actor, path, method, body);
+      if (extra !== undefined) return extra;
+
       const person = s.people.find((p) => p.id === actor)!;
       if (method === "POST" && path[0] === "workspaces") {
         if (person.role === "Guest")
@@ -342,7 +321,12 @@ async function handle(req: NextRequest, method: string) {
         notify(s, t, actor, `${person.name} assigned you to ${t.title}`);
         return t;
       }
-      if (path[0] === "tasks" && path[1] && method === "PATCH") {
+      if (
+        path[0] === "tasks" &&
+        path[1] &&
+        path.length === 2 &&
+        method === "PATCH"
+      ) {
         const t = task(s, path[1], actor, "Edit");
         const p = project(s, t.projectId, actor, "Edit");
         if (p.archived) fail(403, "Archived project is read-only.");
@@ -352,7 +336,28 @@ async function handle(req: NextRequest, method: string) {
             "This task changed. Your input has been kept; reload the latest task before saving again.",
           );
         if ("archived" in body) project(s, t.projectId, actor, "Manage");
+        if (
+          t.archived &&
+          (body.archived !== false ||
+            Object.keys(body).some((k) => !["archived", "version"].includes(k)))
+        )
+          fail(403, "Restore this task before editing it.");
         const updates = taskFields(s, p, body);
+        if (typeof updates.archived === "boolean")
+          for (const child of s.tasks.filter(
+            (c) => c.parentId === t.id && !c.deletedAt,
+          )) {
+            if (updates.archived && !child.archived) {
+              child.archived = true;
+              child.archivedWithParent = t.id;
+              child.version++;
+            }
+            if (!updates.archived && child.archivedWithParent === t.id) {
+              child.archived = false;
+              child.archivedWithParent = null;
+              child.version++;
+            }
+          }
         const old = t.status;
         Object.assign(t, updates, { version: t.version + 1 });
         activity(
@@ -493,3 +498,5 @@ async function handle(req: NextRequest, method: string) {
 export const GET = (req: NextRequest) => handle(req, "GET");
 export const POST = (req: NextRequest) => handle(req, "POST");
 export const PATCH = (req: NextRequest) => handle(req, "PATCH");
+
+export const DELETE = (req: NextRequest) => handle(req, "DELETE");

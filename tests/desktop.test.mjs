@@ -1,11 +1,83 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, access } from "node:fs/promises";
+import { mkdtemp, readFile, access, mkdir, readdir } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, expect } from "@playwright/test";
 const packaged = process.env.RELAYWORK_DESKTOP_EXECUTABLE;
 const profile = await mkdtemp(join(tmpdir(), "relaywork-desktop-test-"));
+// Start with a v0.1-style database to verify that an existing profile upgrades safely.
+await mkdir(join(profile, "data"), { recursive: true });
+const oldDatabase = new DatabaseSync(join(profile, "data", "relaywork.sqlite"));
+const people = [
+  {
+    id: "alex",
+    name: "Alex Morgan",
+    email: "alex@example.test",
+    initials: "AM",
+    color: "#e5d9fc",
+    role: "Owner",
+  },
+  {
+    id: "jordan",
+    name: "Jordan Lee",
+    email: "jordan@example.test",
+    initials: "JL",
+    color: "#d7e5f9",
+    role: "Guest",
+  },
+];
+oldDatabase.exec(
+  "CREATE TABLE app (id INTEGER PRIMARY KEY, data TEXT NOT NULL)",
+);
+oldDatabase.prepare("INSERT INTO app VALUES (1, ?)").run(
+  JSON.stringify({
+    people,
+    workspaces: [
+      {
+        id: "studio",
+        name: "Forma Studio",
+        initials: "FS",
+        members: ["alex", "jordan"],
+      },
+    ],
+    projects: [
+      {
+        id: "brand",
+        workspaceId: "studio",
+        name: "Brand launch",
+        description: "An existing project.",
+        color: "#8772ce",
+        icon: "spark",
+        restricted: true,
+        grants: { alex: "Manage", jordan: "Comment" },
+      },
+    ],
+    tasks: [
+      {
+        id: "RW-101",
+        projectId: "brand",
+        title: "Preserved legacy task",
+        description: "Created before the upgrade.",
+        status: "To do",
+        priority: "Normal",
+        assignees: ["alex"],
+        due: "",
+        tags: [],
+        checklist: [],
+        version: 1,
+        archived: false,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    comments: [],
+    activity: [],
+    notices: [],
+    nextTask: 102,
+  }),
+);
+oldDatabase.close();
 async function launch() {
   return electron.launch({
     ...(packaged ? { executablePath: resolve(packaged) } : {}),
@@ -52,6 +124,18 @@ test(
       await expect(
         page.getByRole("heading", { name: "Brand launch", exact: true }),
       ).toBeVisible({ timeout: 45000 });
+      await expect(
+        page.getByRole("button", {
+          name: "Preserved legacy task",
+          exact: true,
+        }),
+      ).toBeVisible();
+      assert.ok(
+        (await readdir(join(profile, "data", "backups"))).some((n) =>
+          n.startsWith("before-v0.2.0-"),
+        ),
+        "The upgrade must back up the old database",
+      );
       const origin = new URL(page.url()).origin;
       const security = await app.evaluate(({ BrowserWindow }) => {
         const w = BrowserWindow.getAllWindows()[0],
@@ -128,7 +212,7 @@ test(
       await detail.getByRole("button", { name: "Close task" }).click();
       await nativeAction(app, "Search tasks…");
       await page
-        .getByPlaceholder("Search by task name, ID, or keyword...")
+        .getByRole("textbox", { name: "Search all work" })
         .fill("Native desktop review");
       await expect(
         page.locator(".search-results").getByText("Native desktop review"),
@@ -191,6 +275,41 @@ test(
         path: join(profile, "native-desktop.png"),
         fullPage: true,
       });
+      await page
+        .getByRole("button", { name: "Documents", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "Create your first document" })
+        .click();
+      await page
+        .getByRole("textbox", { name: "Document title", exact: true })
+        .fill("Native document");
+      await page
+        .getByRole("textbox", { name: "Document content", exact: true })
+        .fill("This document survives the desktop restart.");
+      await expect(page.locator(".document-topline [role=status]")).toHaveText(
+        "Saved",
+        { timeout: 15000 },
+      );
+      await page.getByLabel("Insert image", { exact: true }).setInputFiles({
+        name: "desktop-image.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX1EAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      });
+      await expect(page.locator(".document-image img")).toBeVisible();
+      await page
+        .getByLabel("Image caption", { exact: true })
+        .fill("Desktop image persists too");
+      await expect(page.locator(".document-topline [role=status]")).toHaveText(
+        "Saved",
+        { timeout: 15000 },
+      );
+      await page
+        .getByLabel("Image caption", { exact: true })
+        .fill("Final edit saved on close");
       await app.close();
       app = null;
       for (let i = 0; i < 50; i++) {
@@ -215,6 +334,25 @@ test(
         origin,
         "Stable local origin preserves saved browser views",
       );
+      const persisted = await page.evaluate(
+        async () => await (await fetch("/api/state")).json(),
+      );
+      assert.match(
+        JSON.stringify(persisted.documents),
+        /Final edit saved on close/,
+        "The last edit must reach SQLite before quitting",
+      );
+      await page
+        .getByRole("button", { name: "Documents", exact: true })
+        .click();
+      await expect(
+        page.getByRole("textbox", { name: "Document content", exact: true }),
+      ).toContainText("This document survives the desktop restart.");
+      await expect(page.locator(".document-image img")).toBeVisible();
+      await expect(
+        page.getByLabel("Image caption", { exact: true }),
+      ).toHaveValue("Final edit saved on close");
+      await page.getByRole("button", { name: "Board", exact: true }).click();
       await page
         .getByRole("button", { name: "Native desktop review", exact: true })
         .click();

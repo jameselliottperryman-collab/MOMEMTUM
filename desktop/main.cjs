@@ -6,6 +6,7 @@ const {
   session,
   shell,
   utilityProcess,
+  ipcMain,
 } = require("electron");
 const { join } = require("node:path");
 const {
@@ -36,6 +37,8 @@ let win,
   backend,
   origin,
   quitting = false;
+let closing = false,
+  bypassClose = false;
 const token = randomBytes(32).toString("hex");
 const appRoot = app.isPackaged
   ? app.getAppPath()
@@ -45,6 +48,8 @@ function log(message) {
   appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
 }
 function fatal(message) {
+  bypassClose = true;
+  quitting = true;
   log(message);
   dialog.showErrorBox(
     "Relaywork couldn’t start",
@@ -157,7 +162,8 @@ function send(action) {
 }
 function openExternal(url) {
   try {
-    if (new URL(url).protocol === "https:") shell.openExternal(url);
+    if (["https:", "http:", "mailto:"].includes(new URL(url).protocol))
+      shell.openExternal(url);
   } catch {}
 }
 function configureSession() {
@@ -195,14 +201,58 @@ function configureSession() {
   );
   desktopSession.on("will-download", (_event, item) => {
     item.setSaveDialogOptions({
-      title: "Export Relaywork tasks",
+      title: "Save Relaywork file",
       defaultPath: join(app.getPath("documents"), item.getFilename()),
-      filters: [{ name: "CSV files", extensions: ["csv"] }],
+      filters: [{ name: "All files", extensions: ["*"] }],
     });
   });
   return desktopSession;
 }
+function flushRenderer() {
+  if (!win || win.isDestroyed()) return Promise.resolve(true);
+  const target = win.webContents,
+    id = randomBytes(8).toString("hex");
+  return new Promise((resolve) => {
+    const done = (ok) => {
+      clearTimeout(timer);
+      ipcMain.removeListener("desktop:flushed", listener);
+      resolve(ok);
+    };
+    const listener = (event, responseId, ok) => {
+      if (event.sender === target && responseId === id) done(ok === true);
+    };
+    const timer = setTimeout(() => done(false), 8000);
+    ipcMain.on("desktop:flushed", listener);
+    target.send("desktop:flush", id);
+  });
+}
+async function finishClose(quit) {
+  if (closing) return;
+  closing = true;
+  try {
+    const saved = await flushRenderer();
+    if (!saved && win && !win.isDestroyed()) {
+      const result = await dialog.showMessageBox(win, {
+        type: "warning",
+        title: "Document edits are not saved yet",
+        message: "Some document edits could not be saved.",
+        detail:
+          "A local draft is kept on this device. Keep editing to retry, or close and recover the draft when you next open this document.",
+        buttons: ["Keep editing", "Close and keep local draft"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (result.response !== 1) return;
+    }
+    bypassClose = true;
+    if (quit) app.quit();
+    else win?.close();
+  } finally {
+    closing = false;
+  }
+}
 function createWindow(desktopSession) {
+  bypassClose = false;
   win = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -235,6 +285,15 @@ function createWindow(desktopSession) {
     return { action: "deny" };
   });
   win.webContents.on("will-attach-webview", (event) => event.preventDefault());
+  win.on("close", (event) => {
+    if (!bypassClose && !quitting) {
+      event.preventDefault();
+      void finishClose(false);
+    }
+  });
+  win.webContents.on("will-prevent-unload", (event) => {
+    if (bypassClose) event.preventDefault();
+  });
   win.on("closed", () => {
     win = null;
   });
@@ -346,7 +405,7 @@ function buildMenu() {
               title: "About Relaywork",
               message: `Relaywork ${require("../package.json").version}`,
               detail:
-                "A little more in sync.\n\nLocal desktop demonstration with sample accounts. Data stays on this device. Production sign-in, cloud sync, email invitations and attachments are not connected.",
+                "A little more in sync.\n\nLocal desktop demonstration with sample accounts. Data stays on this device. Production sign-in, cloud sync and email invitations are not connected.",
               buttons: ["Done"],
             }),
         },
@@ -364,7 +423,12 @@ else {
       win.focus();
     }
   });
-  app.on("before-quit", () => {
+  app.on("before-quit", (event) => {
+    if (!bypassClose && win && !win.isDestroyed()) {
+      event.preventDefault();
+      void finishClose(true);
+      return;
+    }
     quitting = true;
     backend?.kill();
   });

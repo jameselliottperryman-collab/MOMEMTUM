@@ -1,9 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { normalizeState } from "./features";
 import { randomUUID } from "node:crypto";
 import type { State, Task } from "./model";
-const dir = process.env.RELAYWORK_DATA_DIR || join(process.cwd(), ".data");
+export const dir =
+  process.env.RELAYWORK_DATA_DIR || join(process.cwd(), ".data");
 mkdirSync(dir, { recursive: true });
 const db = new DatabaseSync(join(dir, "relaywork.sqlite"));
 db.exec(
@@ -296,12 +298,34 @@ function seed(): State {
     nextTask: 115,
   };
 }
-if (!db.prepare("SELECT id FROM app WHERE id = 1").get())
-  db.prepare("INSERT INTO app VALUES (1, ?)").run(JSON.stringify(seed()));
+const existing = db.prepare("SELECT data FROM app WHERE id = 1").get() as
+  { data: string } | undefined;
+if (!existing)
+  db.prepare("INSERT INTO app VALUES (1, ?)").run(
+    JSON.stringify(normalizeState(seed())),
+  );
+else {
+  const previous = JSON.parse(existing.data) as State;
+  if ((previous.schemaVersion || 0) < 2) {
+    const backups = join(dir, "backups");
+    mkdirSync(backups, { recursive: true });
+    db.prepare("VACUUM INTO ?").run(
+      join(backups, `before-v0.2.0-${Date.now()}.sqlite`),
+    );
+    db.prepare("UPDATE app SET data = ? WHERE id = 1").run(
+      JSON.stringify(normalizeState(previous)),
+    );
+  }
+}
 export function readState(): State {
-  return JSON.parse(
-    (db.prepare("SELECT data FROM app WHERE id = 1").get() as { data: string })
-      .data,
+  return normalizeState(
+    JSON.parse(
+      (
+        db.prepare("SELECT data FROM app WHERE id = 1").get() as {
+          data: string;
+        }
+      ).data,
+    ),
   );
 }
 export function mutate<T>(fn: (state: State) => T): T {

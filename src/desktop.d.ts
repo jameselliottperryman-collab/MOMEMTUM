@@ -3,6 +3,7 @@ declare global {
   interface Window {
     relayworkDesktop?: {
       platform: string;
+      onBeforeQuit: (callback: () => Promise<boolean>) => () => void;
       onAction: (
         callback: (
           action:

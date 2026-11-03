@@ -40,6 +40,17 @@ The server uses port 3000 by default. `npm run dev -- --port 3002` selects anoth
 - CSV preview validates the entire file before writes. Commit is transactional and an operation ID prevents duplicate retries. Manager-only CSV export escapes spreadsheet formulas.
 - Persistent SQLite storage, optimistic task version checks (412 conflicts), input validation, same-origin write checks, HTTP-only session cookies, keyboard-friendly dialogs and a responsive navigation/drawer layout.
 
+### New in 0.2.0
+
+- **Task trash:** editors can move a task, or a selection of tasks in List, to Trash and restore them. Deleting a parent includes its subtasks; restoring the parent preserves subtasks that were independently deleted earlier. Archived state is retained. There is no automatic purge or permanent-delete action.
+- **Project documents:** the Documents tab includes headings, bold/italic, lists, tables, links and checkboxes. Edits autosave after a short pause. Up to 30 previous saves can be previewed/restored as a new version. Optimistic version checks protect concurrent edits; errors preserve a local draft with download/retry/reload controls. Drafts are scoped to the current demo identity. Desktop shutdown waits for pending document edits before stopping its backend; if saving fails, it offers to keep editing or retain a local draft.
+- **Images and PDFs:** upload to tasks or documents, drop files, or paste images into the editor. Embedded images have a width control and caption. PNG, JPEG, WebP, GIF and PDF files are supported, up to 25 MiB each. Binary signatures are checked; this local demo does not provide antivirus scanning. PDFs download as attachments. Images referenced by document history are retained so recovery remains possible.
+- **Connected work:** link existing project documents and tasks, open either from the other, and turn a selected line of a document into a linked task without removing its source text.
+- **Subtasks and reminders:** one level of subtasks with independent status, priority and due date; private time-based reminders delivered to Inbox. Reminders are checked while the app is open (the UI polls every 15 seconds) or when it next opens. No background service, email or OS notification is scheduled after quitting the app.
+- **Global search:** authorized tasks and IDs, document titles/body text and file names in the selected workspace. PDF contents and image OCR are not indexed. Trashed tasks and their files are excluded.
+
+The first v0.2.0 startup upgrades the existing database and makes a consistent SQLite backup under `data/backups` before the migration. Native tests start from a v0.1-style database and check that the old task survives, that a backup exists, and that new documents and images survive a full app restart. Close v0.1 before running v0.2; keep the entire user-data profile when backing up or moving the app.
+
 ### Sample accounts
 
 Use the profile menu at the bottom of the sidebar to switch:
@@ -59,7 +70,7 @@ Next.js App Router + React + TypeScript; versioned tasks and project-scoped auth
 
 Data is created once in `.data/relaywork.sqlite` (ignored by Git), with relative sample deadlines. Set `RELAYWORK_DATA_DIR` to use another writable directory. Retain the database and its WAL files together; use SQLite’s backup tooling for a consistent live backup. Restarting the server preserves tasks and sessions; sessions expire after 24 hours. To start clean without deleting existing data, stop the server and choose a new data directory.
 
-Personal saved views stay in browser local storage. Other clients’ changes become visible on reload; live collaboration and a background notification worker are not connected. Session or grant revocation is enforced on subsequent requests; previously rendered browser content cannot be recalled.
+Personal saved views stay in browser local storage. Other clients’ changes become visible on the next 15-second refresh or on reload; live collaboration and a background notification worker are not connected. Session or grant revocation is enforced on subsequent requests; previously rendered browser content cannot be recalled.
 
 Key files:
 
@@ -84,7 +95,7 @@ Browser tests use `/usr/bin/chromium` when present, or Playwright’s Chromium o
 
 ## Remaining work before the brief’s pilot
 
-This delivers the core demonstration, **not all MVP acceptance criteria**. Production OIDC identity, email-bound invitations, secure file storage/scanning/downloads, relational PostgreSQL migrations and row policies, a durable outbox/worker, rate limits, reauthentication/audit administration, idempotent task creation, subtasks, typed custom fields, configurable statuses, spaces/folders, project archive controls, follow/mute preferences and paginated APIs remain to implement. The API is internal and not yet a versioned public API. No AI features are implemented.
+This delivers the core demonstration, **not all MVP acceptance criteria**. Production OIDC identity, email-bound invitations, managed cloud file storage and antivirus scanning, relational PostgreSQL migrations and row policies, a durable outbox/worker, rate limits, reauthentication/audit administration, idempotent task creation, typed custom fields, configurable statuses, spaces/folders, project archive controls, follow/mute preferences and paginated APIs remain to implement. The API is internal and not yet a versioned public API. No AI features are implemented.
 
 Before public use: implement production identity and tenancy, remove public demo account switching, test the full policy matrix, add deployment/backup monitoring, and perform accessibility, supported-browser, load and restore validation. No deployment, publication, email delivery, or third-party integration is performed by this repository.
 
@@ -117,8 +128,8 @@ This builds Next.js standalone output, stages the shell and runtime files under 
 ### Desktop behavior
 
 - Native File, Edit, View, Window and Help menus; New task (`Ctrl/Cmd+N`), Search (`Ctrl/Cmd+K`), My work (`Ctrl/Cmd+1`), and Inbox (`Ctrl/Cmd+2`).
-- Native CSV save dialog, locally bundled fonts and app icons, standard window controls and a single running instance per profile.
-- Sandboxed renderer with Node integration disabled, context isolation, a narrow read-only preload bridge, restrictive content policy, denied device permissions, and blocked remote content/webviews. HTTPS links open in the system browser.
+- Native CSV, image and PDF save dialogs, locally bundled fonts and app icons, standard window controls and a single running instance per profile.
+- Sandboxed renderer with Node integration disabled, context isolation, a narrow read-only preload bridge, restrictive content policy, denied device permissions, and blocked remote content/webviews. HTTP(S) and email links open through the system’s associated application.
 - Backend binds only to `127.0.0.1`. A fresh per-launch token is injected by the privileged Electron session and required by the desktop server. It is not exposed to renderer JavaScript. The normal web app does not require this header.
 - A stable, saved loopback port preserves the origin for saved browser views. If another process occupies it, Relaywork chooses a free port; tasks remain intact but origin-scoped personal views may need saving again.
 - Desktop data is separate from the repository’s web-demo database. It stays on this device; there is no cloud synchronization or cross-device sharing. The desktop version still uses sample identities and must not be treated as production authentication.
@@ -131,7 +142,7 @@ Default desktop data directories:
 | macOS   | `~/Library/Application Support/Relaywork`                        |
 | Windows | `%APPDATA%\Relaywork`                                            |
 
-The database is under `data/relaywork.sqlite` inside the profile. File → Show local data folder opens its directory. Cookies and saved views are retained in the profile. Closing all windows quits the app and its backend on Windows/Linux; on macOS use Quit to exit completely. Installation/builds never copy a personal database, session data or `.env` files into the package. To back up data, quit the app before copying its profile; removing or replacing an extracted application does not remove the profile.
+The database is under `data/relaywork.sqlite` inside the profile; attachment bytes live in `data/uploads` and upgrade backups in `data/backups`. File → Show local data folder opens its directory. Cookies and saved views are retained in the profile. Closing all windows quits the app and its backend on Windows/Linux; on macOS use Quit to exit completely. Installation/builds never copy a personal database, session data or `.env` files into the package. To back up data, quit the app before copying its profile; removing or replacing an extracted application does not remove the profile.
 
 For an isolated test profile set `RELAYWORK_DESKTOP_PROFILE` to an absolute directory. The diagnostic log is `desktop.log` in that profile; startup failures identify that location while preserving the database.
 
@@ -154,6 +165,6 @@ RELAYWORK_DESKTOP_EXECUTABLE="$PWD/release/Relaywork-linux-x64/relaywork" npm ru
 
 The **Windows desktop download** workflow builds on a Windows runner, tests the packaged `relaywork.exe`, and attaches a ZIP and SHA-256 checksum to a GitHub prerelease. It runs after relevant pushes to `main`, or manually from the repository’s Actions tab. Each published tag contains the source commit, so previous downloads remain identifiable.
 
-Open [GitHub releases](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases) and select the **Relaywork … Windows desktop demo** entry. Download `Relaywork-0.1.0-windows-x64.zip`, choose **Extract all**, open the extracted `Relaywork-win32-x64` folder, and run `relaywork.exe`. The complete folder is required. These are unsigned demonstration builds for Windows x64; do not disable Windows security protections to run them. If a build or native test fails, the workflow does not publish a download.
+Open [GitHub releases](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases) and select the **Relaywork … Windows desktop demo** entry. Download the ZIP matching the version you want, choose **Extract all**, open the extracted `Relaywork-win32-x64` folder, and run `relaywork.exe`. The complete folder is required. These are unsigned demonstration builds for Windows x64; do not disable Windows security protections to run them. If a build or native test fails, the workflow does not publish a download.
 
 The native Windows packaging command now creates its ZIP and checksum automatically; it is still built and tested on Windows, not cross-compiled from Linux.

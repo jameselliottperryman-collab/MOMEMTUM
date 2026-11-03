@@ -46,6 +46,8 @@ import {
   CalendarDays,
   Link2,
   Archive,
+  Trash2,
+  FileText,
   Send,
   CircleDashed,
   Activity,
@@ -61,7 +63,17 @@ import type {
   Activity as TaskActivity,
   Notice,
   Workspace,
+  ProjectDocument,
+  FileAttachment,
+  DocumentLink,
+  Reminder,
 } from "@/lib/model";
+import {
+  DocumentsView,
+  TrashView,
+  TaskExtras,
+  UniversalSearch,
+} from "@/components/work-features";
 import { statuses, priorities } from "@/lib/model";
 type ProjectView = Project & {
   access: Grant;
@@ -78,6 +90,10 @@ type Data = {
   activity: TaskActivity[];
   notices: Notice[];
   demo: boolean;
+  documents: ProjectDocument[];
+  attachments: FileAttachment[];
+  documentLinks: DocumentLink[];
+  reminders: Reminder[];
 };
 type Modal =
   | "task"
@@ -252,7 +268,9 @@ export default function Home() {
   const [workspace, setWorkspace] = useState("studio"),
     [projectId, setProjectId] = useState("brand"),
     [screen, setScreen] = useState<"project" | "mywork" | "inbox">("project"),
-    [layout, setLayout] = useState<"Board" | "List" | "Overview">("Board");
+    [layout, setLayout] = useState<
+      "Board" | "List" | "Overview" | "Documents" | "Trash"
+    >("Board");
   const [modal, setModal] = useState<Modal>(null),
     [selected, setSelected] = useState<string | null>(null),
     [sidebar, setSidebar] = useState(false),
@@ -274,13 +292,20 @@ export default function Home() {
   const [csv, setCsv] = useState(""),
     [preview, setPreview] = useState<Partial<Task>[] | null>(null),
     [detailTab, setDetailTab] = useState("Comments");
+  const [activeDocument, setActiveDocument] = useState<string | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const refreshSequence = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const importKey = useRef("");
+  const requestedDocument = useRef<{ id: string; projectId: string } | null>(
+    null,
+  );
   async function refresh() {
+    const sequence = ++refreshSequence.current;
     const r = await fetch("/api/state", { cache: "no-store" });
     const d = await r.json();
     if (!r.ok) throw Error(d.error);
-    setData(d);
+    if (sequence === refreshSequence.current) setData(d);
     return d as Data;
   }
   useEffect(() => {
@@ -333,6 +358,11 @@ export default function Home() {
     } catch {}
     setQuery("");
     setShowArchive(false);
+    if (requestedDocument.current?.projectId === projectId) {
+      setLayout("Documents");
+      setActiveDocument(requestedDocument.current.id);
+      requestedDocument.current = null;
+    }
   }, [projectId]);
   function saveView() {
     localStorage.setItem(
@@ -391,6 +421,18 @@ export default function Home() {
       importKey.current = crypto.randomUUID();
     }
   }
+  function openDocument(id: string) {
+    const d = data?.documents.find((d) => d.id === id);
+    if (!d) return;
+    if (d.projectId !== projectId)
+      requestedDocument.current = { id: d.id, projectId: d.projectId };
+    setSelected(null);
+    setModal(null);
+    setProjectId(d.projectId);
+    setScreen("project");
+    setLayout("Documents");
+    setActiveDocument(id);
+  }
   function openProject(id: string) {
     setProjectId(id);
     setScreen("project");
@@ -414,6 +456,7 @@ export default function Home() {
     data?.tasks.filter((t) => {
       const p = data.projects.find((p) => p.id === t.projectId);
       return (
+        !t.deletedAt &&
         p?.workspaceId === workspace &&
         (screen === "mywork"
           ? t.assignees.includes(data.user.id)
@@ -456,7 +499,9 @@ export default function Home() {
     );
   const activeBase = baseTasks.filter((t) => !t.archived),
     done = activeBase.filter((t) => t.status === "Done").length;
-  const selectedTask = data?.tasks.find((t) => t.id === selected);
+  const selectedTask = data?.tasks.find(
+    (t) => t.id === selected && !t.deletedAt,
+  );
   const selectedProject = data?.projects.find(
     (p) => p.id === selectedTask?.projectId,
   );
@@ -516,6 +561,34 @@ export default function Home() {
       }),
     [data, projectId, screen],
   );
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible")
+        void refresh().catch(() => {});
+    }, 15000);
+    const focus = () => void refresh().catch(() => {});
+    window.addEventListener("focus", focus);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", focus);
+    };
+  }, []);
+  useEffect(() => setSelectedTaskIds([]), [projectId]);
+  async function deleteTasks(ids: string[]) {
+    const r = await action(
+      "trash",
+      "POST",
+      { ids, operation: "delete" },
+      "Tasks moved to trash. You can restore them from the Trash tab.",
+    );
+    if (r) {
+      setSelectedTaskIds([]);
+      setSelected(null);
+    }
+  }
+  useEffect(() => {
+    if (layout === "Trash" && data && !canEdit) setLayout("Board");
+  }, [layout, canEdit, data?.user.id]);
   if (loading)
     return (
       <div className="loading-screen">
@@ -558,6 +631,14 @@ export default function Home() {
       <button className="card-title" onClick={() => openTask(t.id)}>
         {t.title}
       </button>
+      {t.parentId && (
+        <button
+          className="subtask-parent-link"
+          onClick={() => openTask(t.parentId!)}
+        >
+          Subtask · {t.parentId}
+        </button>
+      )}
       <p className="card-description">{t.description}</p>
       <div className="tag-row">
         {t.tags.map((tag) => (
@@ -1045,13 +1126,27 @@ export default function Home() {
               </div>
               <div className="view-tabs">
                 <div className="view-tab-group">
-                  {(["Overview", "List", "Board"] as const).map((v) => (
+                  {(
+                    [
+                      "Overview",
+                      "List",
+                      "Board",
+                      ...(screen === "project" ? ["Documents"] : []),
+                      ...(screen === "project" && canEdit ? ["Trash"] : []),
+                    ] as (
+                      "Overview" | "List" | "Board" | "Documents" | "Trash"
+                    )[]
+                  ).map((v) => (
                     <button
                       key={v}
                       className={layout === v ? "selected" : ""}
                       onClick={() => setLayout(v)}
                     >
-                      {v === "Overview" ? (
+                      {v === "Documents" ? (
+                        <FileText size={15} />
+                      ) : v === "Trash" ? (
+                        <Trash2 size={15} />
+                      ) : v === "Overview" ? (
                         <LayoutGrid size={15} />
                       ) : v === "List" ? (
                         <List size={16} />
@@ -1072,505 +1167,595 @@ export default function Home() {
                 </span>
               </div>
             </section>
-            <section className="work-surface">
-              <div className="project-summary">
-                <div className="summary-message">
-                  <span className="sun-icon">
-                    <Asterisk size={32} />
-                  </span>
-                  <div>
-                    <strong>
-                      {screen === "mywork"
-                        ? "Make room for your best work."
-                        : "Big ideas, moving forward."}
-                    </strong>
-                    <span>
-                      {activeBase.length
-                        ? `${activeBase.length - done} tasks to go. One great launch ahead.`
-                        : "A blank canvas for something great."}
+            {screen === "project" && layout === "Documents" ? (
+              <section className="feature-surface">
+                <DocumentsView
+                  data={data}
+                  reload={refresh}
+                  message={setToast}
+                  projectId={projectId}
+                  activeId={activeDocument}
+                  onActive={setActiveDocument}
+                  onTask={openTask}
+                />
+              </section>
+            ) : screen === "project" && layout === "Trash" ? (
+              <section className="feature-surface">
+                <TrashView
+                  data={data}
+                  reload={refresh}
+                  message={setToast}
+                  projectId={projectId}
+                />
+              </section>
+            ) : (
+              <section className="work-surface">
+                <div className="project-summary">
+                  <div className="summary-message">
+                    <span className="sun-icon">
+                      <Asterisk size={32} />
                     </span>
+                    <div>
+                      <strong>
+                        {screen === "mywork"
+                          ? "Make room for your best work."
+                          : "Big ideas, moving forward."}
+                      </strong>
+                      <span>
+                        {activeBase.length
+                          ? `${activeBase.length - done} tasks to go. One great launch ahead.`
+                          : "A blank canvas for something great."}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="summary-progress">
-                  <span>
-                    <strong>{done}</strong> of {activeBase.length} tasks
-                    complete{" "}
-                    <b>
-                      {activeBase.length
-                        ? Math.round((done / activeBase.length) * 100)
-                        : 0}
-                      %
-                    </b>
-                  </span>
-                  <div className="progress-track">
-                    <i
-                      style={{
-                        width:
-                          (activeBase.length
-                            ? (done / activeBase.length) * 100
-                            : 0) + "%",
-                      }}
-                    />
+                  <div className="summary-progress">
+                    <span>
+                      <strong>{done}</strong> of {activeBase.length} tasks
+                      complete{" "}
+                      <b>
+                        {activeBase.length
+                          ? Math.round((done / activeBase.length) * 100)
+                          : 0}
+                        %
+                      </b>
+                    </span>
+                    <div className="progress-track">
+                      <i
+                        style={{
+                          width:
+                            (activeBase.length
+                              ? (done / activeBase.length) * 100
+                              : 0) + "%",
+                        }}
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className="summary-divider" />
-                <div className="summary-review">
-                  <span className="review-orbit">
-                    <CircleDashed size={19} />
-                  </span>
-                  <div>
-                    <strong>
-                      {
-                        activeBase.filter((t) => t.status === "In review")
-                          .length
-                      }{" "}
-                      in review
-                    </strong>
-                    <span>Ready for a fresh perspective</span>
-                  </div>
-                </div>
-              </div>
-              {screen === "mywork" && (
-                <div className="mywork-buckets">
-                  {["Overdue", "Upcoming", "No date"].map((bucket) => (
-                    <button
-                      key={bucket}
-                      className={dueFilter === bucket ? "selected" : ""}
-                      onClick={() => {
-                        setDueFilter(dueFilter === bucket ? "All" : bucket);
-                      }}
-                    >
-                      <span>{bucket === "No date" ? "Undated" : bucket}</span>
+                  <div className="summary-divider" />
+                  <div className="summary-review">
+                    <span className="review-orbit">
+                      <CircleDashed size={19} />
+                    </span>
+                    <div>
                       <strong>
                         {
-                          activeBase.filter(
-                            (t) =>
-                              t.status !== "Done" &&
-                              (bucket === "Overdue"
-                                ? t.due && t.due < today()
-                                : bucket === "Upcoming"
-                                  ? t.due && t.due >= today()
-                                  : !t.due),
-                          ).length
-                        }
+                          activeBase.filter((t) => t.status === "In review")
+                            .length
+                        }{" "}
+                        in review
                       </strong>
-                      {bucket === "Overdue" ? (
-                        <Clock3 size={17} />
-                      ) : (
-                        <CalendarDays size={17} />
-                      )}
-                    </button>
-                  ))}
+                      <span>Ready for a fresh perspective</span>
+                    </div>
+                  </div>
                 </div>
-              )}
-              <div className="board-toolbar">
-                <div className="toolbar-left">
-                  <h3>
-                    {showArchive
-                      ? "Archived tasks"
-                      : screen === "mywork"
-                        ? "Assigned to you"
-                        : "All tasks"}
-                    <span>{tasks.length}</span>
-                  </h3>
-                  <span className="toolbar-divider" />
-                  <button
-                    className={
-                      "toolbar-button " +
-                      (filters || numFilters ? "engaged" : "")
-                    }
-                    onClick={() => setFilters(!filters)}
-                  >
-                    <SlidersHorizontal size={14} />
-                    Filter{numFilters > 0 && <span>{numFilters}</span>}
-                  </button>
-                  <label className="sort-control">
-                    <ArrowUp size={13} />
-                    <ArrowDown size={13} />
-                    <select
-                      aria-label="Sort tasks"
-                      value={sort}
-                      onChange={(e) => setSort(e.target.value)}
-                    >
-                      <option value="Manual">Sort</option>
-                      <option>Due date</option>
-                      <option>Priority</option>
-                      <option>Name</option>
-                    </select>
-                  </label>
-                  <button
-                    className="toolbar-button save-view"
-                    onClick={saveView}
-                  >
-                    Save view
-                  </button>
-                </div>
-                <div className="toolbar-right">
-                  <div className="task-search">
-                    <Search size={14} />
-                    <input
-                      aria-label="Search tasks"
-                      placeholder="Search tasks..."
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                    />
-                    {query && (
+                {screen === "mywork" && (
+                  <div className="mywork-buckets">
+                    {["Overdue", "Upcoming", "No date"].map((bucket) => (
                       <button
-                        className="icon-button tiny"
-                        aria-label="Clear search"
-                        onClick={() => setQuery("")}
+                        key={bucket}
+                        className={dueFilter === bucket ? "selected" : ""}
+                        onClick={() => {
+                          setDueFilter(dueFilter === bucket ? "All" : bucket);
+                        }}
                       >
-                        <X size={12} />
+                        <span>{bucket === "No date" ? "Undated" : bucket}</span>
+                        <strong>
+                          {
+                            activeBase.filter(
+                              (t) =>
+                                t.status !== "Done" &&
+                                (bucket === "Overdue"
+                                  ? t.due && t.due < today()
+                                  : bucket === "Upcoming"
+                                    ? t.due && t.due >= today()
+                                    : !t.due),
+                            ).length
+                          }
+                        </strong>
+                        {bucket === "Overdue" ? (
+                          <Clock3 size={17} />
+                        ) : (
+                          <CalendarDays size={17} />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="board-toolbar">
+                  <div className="toolbar-left">
+                    <h3>
+                      {showArchive
+                        ? "Archived tasks"
+                        : screen === "mywork"
+                          ? "Assigned to you"
+                          : "All tasks"}
+                      <span>{tasks.length}</span>
+                    </h3>
+                    <span className="toolbar-divider" />
+                    <button
+                      className={
+                        "toolbar-button " +
+                        (filters || numFilters ? "engaged" : "")
+                      }
+                      onClick={() => setFilters(!filters)}
+                    >
+                      <SlidersHorizontal size={14} />
+                      Filter{numFilters > 0 && <span>{numFilters}</span>}
+                    </button>
+                    <label className="sort-control">
+                      <ArrowUp size={13} />
+                      <ArrowDown size={13} />
+                      <select
+                        aria-label="Sort tasks"
+                        value={sort}
+                        onChange={(e) => setSort(e.target.value)}
+                      >
+                        <option value="Manual">Sort</option>
+                        <option>Due date</option>
+                        <option>Priority</option>
+                        <option>Name</option>
+                      </select>
+                    </label>
+                    <button
+                      className="toolbar-button save-view"
+                      onClick={saveView}
+                    >
+                      Save view
+                    </button>
+                  </div>
+                  <div className="toolbar-right">
+                    <div className="task-search">
+                      <Search size={14} />
+                      <input
+                        aria-label="Search tasks"
+                        placeholder="Search tasks..."
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                      />
+                      {query && (
+                        <button
+                          className="icon-button tiny"
+                          aria-label="Clear search"
+                          onClick={() => setQuery("")}
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                    <div className="data-menu">
+                      <button
+                        className="icon-button"
+                        aria-label="Project data options"
+                        onClick={() => setFilters(!filters)}
+                      >
+                        <Ellipsis size={18} />
+                      </button>
+                    </div>
+                    {canEdit && (
+                      <button
+                        className="button primary add-task"
+                        onClick={() => addTask()}
+                      >
+                        <Plus size={16} />
+                        Add task
                       </button>
                     )}
                   </div>
-                  <div className="data-menu">
-                    <button
-                      className="icon-button"
-                      aria-label="Project data options"
-                      onClick={() => setFilters(!filters)}
-                    >
-                      <Ellipsis size={18} />
-                    </button>
-                  </div>
-                  {canEdit && (
-                    <button
-                      className="button primary add-task"
-                      onClick={() => addTask()}
-                    >
-                      <Plus size={16} />
-                      Add task
-                    </button>
-                  )}
                 </div>
-              </div>
-              {filters && (
-                <div className="filter-panel">
-                  <label>
-                    Status
-                    <select
-                      value={statusFilter}
-                      onChange={(e) => setStatusFilter(e.target.value)}
-                    >
-                      <option value="All">All statuses</option>
-                      {statuses.map((s) => (
-                        <option key={s}>{s}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Priority
-                    <select
-                      value={priority}
-                      onChange={(e) => setPriority(e.target.value)}
-                    >
-                      <option value="All">All priorities</option>
-                      {priorities.map((s) => (
-                        <option key={s}>{s}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Assignee
-                    <select
-                      value={assignee}
-                      onChange={(e) => setAssignee(e.target.value)}
-                    >
-                      <option value="All">Everyone</option>
-                      <option>Unassigned</option>
-                      {data.people.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Due date
-                    <select
-                      aria-label="Filter due date"
-                      value={dueFilter}
-                      onChange={(e) => setDueFilter(e.target.value)}
-                    >
-                      <option value="All">Any date</option>
-                      <option>Overdue</option>
-                      <option>Upcoming</option>
-                      <option>No date</option>
-                    </select>
-                  </label>
-                  <label className="archive-toggle">
-                    <input
-                      type="checkbox"
-                      checked={showArchive}
-                      onChange={(e) => setShowArchive(e.target.checked)}
-                    />
-                    Show archived
-                  </label>
-                  <button
-                    className="text-button"
-                    onClick={() => {
-                      setPriority("All");
-                      setAssignee("All");
-                      setStatusFilter("All");
-                      setDueFilter("All");
-                      setQuery("");
-                      setShowArchive(false);
-                    }}
-                  >
-                    Reset
-                  </button>
-                  {screen === "project" && (
-                    <div className="filter-data">
-                      {canEdit && (
-                        <button
-                          className="button"
-                          onClick={() => openModal("import")}
-                        >
-                          <Upload size={14} />
-                          Import CSV
-                        </button>
-                      )}
-                      {canManage && (
-                        <button
-                          className="button"
-                          onClick={() => {
-                            window.location.href = "/api/export/" + projectId;
-                          }}
-                        >
-                          <Download size={14} />
-                          Export CSV
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              {layout === "Overview" ? (
-                <div className="overview-grid">
-                  <div className="overview-card">
-                    <span className="eyebrow">THE BIG PICTURE</span>
-                    <h2>
-                      Every step brings
-                      <br />
-                      the idea closer.
-                    </h2>
-                    <p>
-                      {project?.description ||
-                        "A clear view of the work that matters to you."}
-                    </p>
-                    <div className="overview-stats">
-                      {statuses.map((s) => (
-                        <button
-                          key={s}
-                          onClick={() => {
-                            setStatusFilter(s);
-                            setLayout("List");
-                          }}
-                        >
-                          <span className={"status-color " + statusClass(s)}>
-                            <StatusIcon status={s} />
-                          </span>
-                          <strong>
-                            {activeBase.filter((t) => t.status === s).length}
-                          </strong>
-                          <span>{s}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="overview-card upcoming">
-                    <h3>
-                      <CalendarDays size={17} />
-                      Coming up next
-                    </h3>
-                    {activeBase
-                      .filter((t) => t.status !== "Done" && t.due)
-                      .sort((a, b) => a.due.localeCompare(b.due))
-                      .slice(0, 5)
-                      .map((t) => (
-                        <button key={t.id} onClick={() => openTask(t.id)}>
-                          <span
-                            className={"status-color " + statusClass(t.status)}
-                          >
-                            <StatusIcon status={t.status} />
-                          </span>
-                          <strong>{t.title}</strong>
-                          <span>{dateLabel(t.due)}</span>
-                        </button>
-                      ))}
-                    {!activeBase.some((t) => t.status !== "Done" && t.due) && (
-                      <p>No deadlines yet. Room to breathe.</p>
-                    )}
-                  </div>
-                </div>
-              ) : layout === "Board" ? (
-                <div className="kanban-board" aria-label="Task board">
-                  {statuses.map((status) => {
-                    const group = tasks.filter((t) => t.status === status);
-                    return (
-                      <section
-                        key={status}
-                        className={"kanban-column " + statusClass(status)}
-                        onDragOver={(e) => {
-                          if (canEdit) e.preventDefault();
-                        }}
-                        onDrop={async (e) => {
-                          e.preventDefault();
-                          const t = tasks.find(
-                            (t) =>
-                              t.id === e.dataTransfer.getData("text/plain"),
-                          );
-                          if (t && t.status !== status && canEdit)
-                            await updateTask(t, { status });
-                        }}
+                {filters && (
+                  <div className="filter-panel">
+                    <label>
+                      Status
+                      <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
                       >
-                        <header className="column-heading">
-                          <span className="column-status">
-                            <StatusIcon status={status} />
-                            <h2>{status}</h2>
-                            <b>{group.length}</b>
-                          </span>
-                          <div>
-                            <button
-                              className="icon-button tiny"
-                              aria-label={"Show " + status + " in list"}
-                              onClick={() => {
-                                setStatusFilter(status);
-                                setLayout("List");
-                              }}
-                            >
-                              <Ellipsis size={16} />
-                            </button>
-                            {canEdit && (
-                              <button
-                                className="icon-button tiny"
-                                aria-label={"Add task to " + status}
-                                onClick={() => addTask(status)}
-                              >
-                                <Plus size={16} />
-                              </button>
-                            )}
-                          </div>
-                        </header>
-                        <div className="column-cards">
-                          {group.map(taskCard)}
-                          {!group.length && (
-                            <div className="empty-column">
-                              <span>Room for your next idea</span>
-                              <small>
-                                {canEdit
-                                  ? "Add a task or move one here."
-                                  : "No tasks in this stage."}
-                              </small>
-                            </div>
-                          )}
-                        </div>
-                        {canEdit && !showArchive && (
+                        <option value="All">All statuses</option>
+                        {statuses.map((s) => (
+                          <option key={s}>{s}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Priority
+                      <select
+                        value={priority}
+                        onChange={(e) => setPriority(e.target.value)}
+                      >
+                        <option value="All">All priorities</option>
+                        {priorities.map((s) => (
+                          <option key={s}>{s}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Assignee
+                      <select
+                        value={assignee}
+                        onChange={(e) => setAssignee(e.target.value)}
+                      >
+                        <option value="All">Everyone</option>
+                        <option>Unassigned</option>
+                        {data.people.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Due date
+                      <select
+                        aria-label="Filter due date"
+                        value={dueFilter}
+                        onChange={(e) => setDueFilter(e.target.value)}
+                      >
+                        <option value="All">Any date</option>
+                        <option>Overdue</option>
+                        <option>Upcoming</option>
+                        <option>No date</option>
+                      </select>
+                    </label>
+                    <label className="archive-toggle">
+                      <input
+                        type="checkbox"
+                        checked={showArchive}
+                        onChange={(e) => setShowArchive(e.target.checked)}
+                      />
+                      Show archived
+                    </label>
+                    <button
+                      className="text-button"
+                      onClick={() => {
+                        setPriority("All");
+                        setAssignee("All");
+                        setStatusFilter("All");
+                        setDueFilter("All");
+                        setQuery("");
+                        setShowArchive(false);
+                      }}
+                    >
+                      Reset
+                    </button>
+                    {screen === "project" && (
+                      <div className="filter-data">
+                        {canEdit && (
                           <button
-                            className="column-add"
-                            onClick={() => addTask(status)}
+                            className="button"
+                            onClick={() => openModal("import")}
                           >
-                            <Plus size={14} />
-                            Add task
+                            <Upload size={14} />
+                            Import CSV
                           </button>
                         )}
-                      </section>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="task-table-wrap">
-                  <table className="task-table">
-                    <thead>
-                      <tr>
-                        <th>
-                          Task name <span>{tasks.length}</span>
-                        </th>
-                        <th>Status</th>
-                        <th>Assignee</th>
-                        <th>Due date</th>
-                        <th>Priority</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tasks.map((t) => (
-                        <tr key={t.id}>
-                          <td>
-                            <button onClick={() => openTask(t.id)}>
+                        {canManage && (
+                          <button
+                            className="button"
+                            onClick={() => {
+                              window.location.href = "/api/export/" + projectId;
+                            }}
+                          >
+                            <Download size={14} />
+                            Export CSV
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {layout === "Overview" ? (
+                  <div className="overview-grid">
+                    <div className="overview-card">
+                      <span className="eyebrow">THE BIG PICTURE</span>
+                      <h2>
+                        Every step brings
+                        <br />
+                        the idea closer.
+                      </h2>
+                      <p>
+                        {project?.description ||
+                          "A clear view of the work that matters to you."}
+                      </p>
+                      <div className="overview-stats">
+                        {statuses.map((s) => (
+                          <button
+                            key={s}
+                            onClick={() => {
+                              setStatusFilter(s);
+                              setLayout("List");
+                            }}
+                          >
+                            <span className={"status-color " + statusClass(s)}>
+                              <StatusIcon status={s} />
+                            </span>
+                            <strong>
+                              {activeBase.filter((t) => t.status === s).length}
+                            </strong>
+                            <span>{s}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="overview-card upcoming">
+                      <h3>
+                        <CalendarDays size={17} />
+                        Coming up next
+                      </h3>
+                      {activeBase
+                        .filter((t) => t.status !== "Done" && t.due)
+                        .sort((a, b) => a.due.localeCompare(b.due))
+                        .slice(0, 5)
+                        .map((t) => (
+                          <button key={t.id} onClick={() => openTask(t.id)}>
+                            <span
+                              className={
+                                "status-color " + statusClass(t.status)
+                              }
+                            >
+                              <StatusIcon status={t.status} />
+                            </span>
+                            <strong>{t.title}</strong>
+                            <span>{dateLabel(t.due)}</span>
+                          </button>
+                        ))}
+                      {!activeBase.some(
+                        (t) => t.status !== "Done" && t.due,
+                      ) && <p>No deadlines yet. Room to breathe.</p>}
+                    </div>
+                  </div>
+                ) : layout === "Board" ? (
+                  <div className="kanban-board" aria-label="Task board">
+                    {statuses.map((status) => {
+                      const group = tasks.filter((t) => t.status === status);
+                      return (
+                        <section
+                          key={status}
+                          className={"kanban-column " + statusClass(status)}
+                          onDragOver={(e) => {
+                            if (canEdit) e.preventDefault();
+                          }}
+                          onDrop={async (e) => {
+                            e.preventDefault();
+                            const t = tasks.find(
+                              (t) =>
+                                t.id === e.dataTransfer.getData("text/plain"),
+                            );
+                            if (t && t.status !== status && canEdit)
+                              await updateTask(t, { status });
+                          }}
+                        >
+                          <header className="column-heading">
+                            <span className="column-status">
+                              <StatusIcon status={status} />
+                              <h2>{status}</h2>
+                              <b>{group.length}</b>
+                            </span>
+                            <div>
+                              <button
+                                className="icon-button tiny"
+                                aria-label={"Show " + status + " in list"}
+                                onClick={() => {
+                                  setStatusFilter(status);
+                                  setLayout("List");
+                                }}
+                              >
+                                <Ellipsis size={16} />
+                              </button>
+                              {canEdit && (
+                                <button
+                                  className="icon-button tiny"
+                                  aria-label={"Add task to " + status}
+                                  onClick={() => addTask(status)}
+                                >
+                                  <Plus size={16} />
+                                </button>
+                              )}
+                            </div>
+                          </header>
+                          <div className="column-cards">
+                            {group.map(taskCard)}
+                            {!group.length && (
+                              <div className="empty-column">
+                                <span>Room for your next idea</span>
+                                <small>
+                                  {canEdit
+                                    ? "Add a task or move one here."
+                                    : "No tasks in this stage."}
+                                </small>
+                              </div>
+                            )}
+                          </div>
+                          {canEdit && !showArchive && (
+                            <button
+                              className="column-add"
+                              onClick={() => addTask(status)}
+                            >
+                              <Plus size={14} />
+                              Add task
+                            </button>
+                          )}
+                        </section>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="task-table-wrap">
+                    {canEdit && selectedTaskIds.length > 0 && (
+                      <div className="bulk-action-bar">
+                        <span>{selectedTaskIds.length} tasks selected</span>
+                        <button
+                          className="button danger"
+                          disabled={busy}
+                          onClick={() => deleteTasks(selectedTaskIds)}
+                        >
+                          <Trash2 size={14} />
+                          Move selected to trash
+                        </button>
+                        <button
+                          className="text-button"
+                          onClick={() => setSelectedTaskIds([])}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
+                    <table className="task-table">
+                      <thead>
+                        <tr>
+                          <th>
+                            {canEdit && (
+                              <input
+                                className="task-select"
+                                type="checkbox"
+                                aria-label="Select all visible tasks"
+                                checked={
+                                  tasks.length > 0 &&
+                                  tasks.every((t) =>
+                                    selectedTaskIds.includes(t.id),
+                                  )
+                                }
+                                onChange={(e) =>
+                                  setSelectedTaskIds(
+                                    e.target.checked
+                                      ? tasks.map((t) => t.id)
+                                      : [],
+                                  )
+                                }
+                              />
+                            )}
+                            Task name <span>{tasks.length}</span>
+                          </th>
+                          <th>Status</th>
+                          <th>Assignee</th>
+                          <th>Due date</th>
+                          <th>Priority</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tasks.map((t) => (
+                          <tr key={t.id}>
+                            <td>
+                              <div className="task-name-cell">
+                                {canEdit && (
+                                  <input
+                                    className="task-select"
+                                    type="checkbox"
+                                    aria-label={"Select " + t.title}
+                                    checked={selectedTaskIds.includes(t.id)}
+                                    onChange={(e) =>
+                                      setSelectedTaskIds(
+                                        e.target.checked
+                                          ? [...selectedTaskIds, t.id]
+                                          : selectedTaskIds.filter(
+                                              (id) => id !== t.id,
+                                            ),
+                                      )
+                                    }
+                                  />
+                                )}
+                                <button onClick={() => openTask(t.id)}>
+                                  <span
+                                    className={
+                                      "status-color " + statusClass(t.status)
+                                    }
+                                  >
+                                    <StatusIcon status={t.status} />
+                                  </span>
+                                  <span>
+                                    <small>{t.id}</small>
+                                    {t.title}
+                                    {t.parentId && (
+                                      <small>Subtask of {t.parentId}</small>
+                                    )}
+                                  </span>
+                                </button>
+                              </div>
+                            </td>
+                            <td>
                               <span
                                 className={
-                                  "status-color " + statusClass(t.status)
+                                  "status-pill " + statusClass(t.status)
                                 }
                               >
-                                <StatusIcon status={t.status} />
+                                {t.status}
                               </span>
-                              <span>
-                                <small>{t.id}</small>
-                                {t.title}
+                            </td>
+                            <td>
+                              <span className="avatar-stack">
+                                {t.assignees.map((id) => (
+                                  <Avatar key={id} person={person(id)} />
+                                ))}
+                                {!t.assignees.length && "—"}
                               </span>
-                            </button>
-                          </td>
-                          <td>
-                            <span
-                              className={"status-pill " + statusClass(t.status)}
+                            </td>
+                            <td
+                              className={
+                                t.due && t.due < today() && t.status !== "Done"
+                                  ? "overdue"
+                                  : ""
+                              }
                             >
-                              {t.status}
-                            </span>
-                          </td>
-                          <td>
-                            <span className="avatar-stack">
-                              {t.assignees.map((id) => (
-                                <Avatar key={id} person={person(id)} />
-                              ))}
-                              {!t.assignees.length && "—"}
-                            </span>
-                          </td>
-                          <td
-                            className={
-                              t.due && t.due < today() && t.status !== "Done"
-                                ? "overdue"
-                                : ""
-                            }
-                          >
-                            {dateLabel(t.due)}
-                          </td>
-                          <td>
-                            <span className="priority-cell">
-                              <PriorityIcon priority={t.priority} />
-                              {t.priority}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!tasks.length && (
-                    <div className="empty-state">
-                      <Search size={25} />
-                      <h3>No tasks found</h3>
-                      <p>Try adjusting your filters or add your first task.</p>
-                    </div>
-                  )}
-                  {canEdit && (
-                    <button className="column-add" onClick={() => addTask()}>
-                      <Plus size={14} />
-                      Add task
-                    </button>
-                  )}
-                </div>
-              )}
-              <footer className="board-footer">
-                <span>
-                  <span className="footer-dot" />A shared space. A clearer path
-                  forward.
-                </span>
-                <span>
-                  {layout === "Board"
-                    ? "Move tasks by dragging, or open one to change its status."
-                    : "Made for the way your team works."}
-                </span>
-              </footer>
-            </section>
+                              {dateLabel(t.due)}
+                            </td>
+                            <td>
+                              <span className="priority-cell">
+                                <PriorityIcon priority={t.priority} />
+                                {t.priority}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!tasks.length && (
+                      <div className="empty-state">
+                        <Search size={25} />
+                        <h3>No tasks found</h3>
+                        <p>
+                          Try adjusting your filters or add your first task.
+                        </p>
+                      </div>
+                    )}
+                    {canEdit && (
+                      <button className="column-add" onClick={() => addTask()}>
+                        <Plus size={14} />
+                        Add task
+                      </button>
+                    )}
+                  </div>
+                )}
+                <footer className="board-footer">
+                  <span>
+                    <span className="footer-dot" />A shared space. A clearer
+                    path forward.
+                  </span>
+                  <span>
+                    {layout === "Board"
+                      ? "Move tasks by dragging, or open one to change its status."
+                      : "Made for the way your team works."}
+                  </span>
+                </footer>
+              </section>
+            )}
           </>
         )}
       </main>
@@ -1957,82 +2142,15 @@ export default function Home() {
           close={() => setModal(null)}
           wide
         >
-          <div className="global-search">
-            <Search size={20} />
-            <input
-              ref={searchRef}
-              autoFocus
-              placeholder="Search by task name, ID, or keyword..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            <kbd>ESC</kbd>
-          </div>
-          <div className="search-results">
-            {search.trim() ? (
-              data.tasks
-                .filter(
-                  (t) =>
-                    !t.archived &&
-                    data.projects.some(
-                      (p) =>
-                        p.id === t.projectId && p.workspaceId === workspace,
-                    ) &&
-                    `${t.id} ${t.title} ${t.description}`
-                      .toLowerCase()
-                      .includes(search.toLowerCase()),
-                )
-                .sort(
-                  (a, b) =>
-                    Number(b.id.toLowerCase() === search.toLowerCase()) -
-                    Number(a.id.toLowerCase() === search.toLowerCase()),
-                )
-                .slice(0, 30)
-                .map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => {
-                      setModal(null);
-                      openTask(t.id);
-                    }}
-                  >
-                    <span className={"status-color " + statusClass(t.status)}>
-                      <StatusIcon status={t.status} />
-                    </span>
-                    <span>
-                      <strong>{t.title}</strong>
-                      <small>
-                        {t.id} ·{" "}
-                        {data.projects.find((p) => p.id === t.projectId)?.name}
-                      </small>
-                    </span>
-                    <ArrowUpRight size={15} />
-                  </button>
-                ))
-            ) : (
-              <div className="empty-state">
-                <Search size={25} />
-                <h3>Good things are easy to find</h3>
-                <p>Try “homepage”, “design”, or a task ID like RW-101.</p>
-              </div>
-            )}
-            {search &&
-              !data.tasks.some(
-                (t) =>
-                  !t.archived &&
-                  data.projects.some(
-                    (p) => p.id === t.projectId && p.workspaceId === workspace,
-                  ) &&
-                  `${t.id} ${t.title} ${t.description}`
-                    .toLowerCase()
-                    .includes(search.toLowerCase()),
-              ) && (
-                <div className="empty-state">
-                  <h3>No matches this time</h3>
-                  <p>Try a different word or task ID.</p>
-                </div>
-              )}
-          </div>
+          <UniversalSearch
+            data={data}
+            workspace={workspace}
+            onTask={(id) => {
+              setModal(null);
+              openTask(id);
+            }}
+            onDocument={openDocument}
+          />
         </ModalFrame>
       )}
       {modal === "import" && (
@@ -2173,10 +2291,9 @@ export default function Home() {
               </li>
             </ol>
             <p className="demo-explanation">
-              This demo uses sample accounts, not production sign-in. Secure
-              email invitations, file storage, and real-time multi-user
-              collaboration are not connected. Do not use it for confidential
-              data.
+              This demo uses sample accounts, not production sign-in. Email
+              invitations, cloud sync, and real-time multi-user collaboration
+              are not connected. Do not use it for confidential data.
             </p>
             <p className="keyboard-tip">
               <kbd>⌘</kbd> + <kbd>K</kbd> Search anywhere
@@ -2202,6 +2319,11 @@ export default function Home() {
           update={updateTask}
           action={action}
           busy={busy}
+          reload={refresh}
+          message={setToast}
+          onTask={openTask}
+          onDocument={openDocument}
+          onDelete={() => deleteTasks([selectedTask.id])}
         />
       )}
     </div>
@@ -2217,7 +2339,17 @@ function TaskDetail({
   update,
   action,
   busy,
+  reload,
+  message,
+  onTask,
+  onDocument,
+  onDelete,
 }: {
+  reload: () => Promise<unknown>;
+  message: (text: string) => void;
+  onTask: (id: string) => void;
+  onDocument: (id: string) => void;
+  onDelete: () => Promise<void>;
   task: Task;
   project: ProjectView;
   data: Data;
@@ -2309,6 +2441,16 @@ function TaskDetail({
             <strong>{task.id}</strong>
           </span>
           <div>
+            {["Edit", "Manage"].includes(project.access) && (
+              <button
+                className="icon-button"
+                aria-label="Delete task"
+                disabled={busy}
+                onClick={() => void onDelete()}
+              >
+                <Trash2 size={17} />
+              </button>
+            )}
             {project.access === "Manage" && (
               <button
                 className="icon-button"
@@ -2600,6 +2742,15 @@ function TaskDetail({
               <p className="muted">No checklist items.</p>
             )}
           </div>
+          <TaskExtras
+            data={data}
+            reload={reload}
+            message={message}
+            task={task}
+            editable={writable}
+            onTask={onTask}
+            onDocument={onDocument}
+          />
           <div className="detail-tabs">
             <button
               className={tab === "Comments" ? "selected" : ""}

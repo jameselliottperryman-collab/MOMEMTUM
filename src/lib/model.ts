@@ -33,7 +33,12 @@ export type Task = {
   checklist: { id: string; text: string; done: boolean }[];
   version: number;
   archived: boolean;
+  archivedWithParent?: string | null;
   createdAt: string;
+  parentId?: string | null;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
+  deletedBatch?: string | null;
 };
 export type Comment = {
   id: string;
@@ -63,7 +68,60 @@ export type Workspace = {
   initials: string;
   members: string[];
 };
+export type RichNode = {
+  type: string;
+  text?: string;
+  attrs?: Record<string, unknown>;
+  marks?: { type: string; attrs?: Record<string, unknown> }[];
+  content?: RichNode[];
+};
+export type ProjectDocument = {
+  id: string;
+  projectId: string;
+  title: string;
+  body: RichNode;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+export type DocumentRevision = {
+  id: string;
+  documentId: string;
+  title: string;
+  body: RichNode;
+  version: number;
+  savedAt: string;
+  savedBy: string;
+};
+export type FileAttachment = {
+  id: string;
+  projectId: string;
+  taskId?: string;
+  documentId?: string;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: string;
+  uploadedBy: string;
+};
+export type DocumentLink = { documentId: string; taskId: string };
+export type Reminder = {
+  id: string;
+  userId: string;
+  taskId: string;
+  dueAt: string;
+  note: string;
+  deliveredAt?: string;
+};
 export type State = {
+  schemaVersion?: number;
+  documents?: ProjectDocument[];
+  documentRevisions?: DocumentRevision[];
+  attachments?: FileAttachment[];
+  documentLinks?: DocumentLink[];
+  reminders?: Reminder[];
+  nextDocument?: number;
   people: Person[];
   workspaces: Workspace[];
   projects: Project[];
@@ -103,8 +161,20 @@ export function can(
 export function visibleState(state: State, userId: string) {
   const projects = state.projects.filter((p) => grantFor(state, userId, p));
   const ids = new Set(projects.map((p) => p.id));
-  const tasks = state.tasks.filter((t) => ids.has(t.projectId));
-  const tids = new Set(tasks.map((t) => t.id));
+  const tasks = state.tasks.filter(
+    (t) =>
+      ids.has(t.projectId) &&
+      (!t.deletedAt ||
+        can(
+          state,
+          userId,
+          projects.find((p) => p.id === t.projectId)!,
+          "Edit",
+        )),
+  );
+  const tids = new Set(tasks.filter((t) => !t.deletedAt).map((t) => t.id));
+  const documents = (state.documents || []).filter((d) => ids.has(d.projectId));
+  const dids = new Set(documents.map((d) => d.id));
   const workspaces = state.workspaces.filter((w) => w.members.includes(userId));
   const visiblePeople = new Set([
     userId,
@@ -130,6 +200,20 @@ export function visibleState(state: State, userId: string) {
       grants: can(state, userId, p, "Manage") ? p.grants : {},
     })),
     tasks,
+    documents,
+    attachments: (state.attachments || []).filter(
+      (f) =>
+        ids.has(f.projectId) &&
+        (f.taskId
+          ? tids.has(f.taskId)
+          : !!f.documentId && dids.has(f.documentId)),
+    ),
+    documentLinks: (state.documentLinks || []).filter(
+      (l) => tids.has(l.taskId) && dids.has(l.documentId),
+    ),
+    reminders: (state.reminders || []).filter(
+      (r) => r.userId === userId && tids.has(r.taskId),
+    ),
     comments: state.comments.filter((c) => tids.has(c.taskId)),
     activity: state.activity.filter((a) => tids.has(a.taskId)),
     notices: state.notices.filter(

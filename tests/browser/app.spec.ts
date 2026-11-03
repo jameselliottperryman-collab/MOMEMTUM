@@ -63,7 +63,7 @@ test("project board, task creation, comments, checklist, views and persistence",
   ).toBeVisible();
   await page.getByRole("button", { name: "Search anything" }).click();
   await page
-    .getByPlaceholder("Search by task name, ID, or keyword...")
+    .getByRole("textbox", { name: "Search all work" })
     .fill("Prepare pilot");
   await expect(
     page.locator(".search-results").getByText("Prepare pilot review"),
