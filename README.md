@@ -4,9 +4,9 @@ A working local project-collaboration prototype, implemented in MOMEMTUM from th
 
 ## Download for Windows
 
-[**Download Relaywork for Windows 64-bit (.zip)**](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases/download/windows-desktop-v0.1.0-749fd67/Relaywork-0.1.0-windows-x64.zip)
+[**Download Relaywork 0.2.0 for Windows 64-bit (.zip)**](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases/download/windows-desktop-v0.2.0-af15369/Relaywork-0.2.0-windows-x64.zip)
 
-Extract the ZIP, open `Relaywork-win32-x64`, and run `relaywork.exe`. Keep the whole extracted folder together. This unsigned demo was built on Windows and its extracted executable passed the native workflow test, including reviewer permissions and persistence after restart. [Release page and checksum](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases/tag/windows-desktop-v0.1.0-749fd67).
+Close any older version, extract the ZIP into a new folder, open `Relaywork-win32-x64`, and run `relaywork.exe`. Keep the whole extracted folder together. Existing profile data is retained and backed up before its first upgrade. This unsigned demo was built on Windows and its extracted executable passed the native workflow test, including reviewer permissions, document saving on close and persistence after restart. [Release page and checksum](https://github.com/jameselliottperryman-collab/MOMEMTUM/releases/tag/windows-desktop-v0.2.0-af15369).
 
 ## Run
 
