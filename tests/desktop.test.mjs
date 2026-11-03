@@ -154,7 +154,14 @@ test(
         .locator(".account-popover")
         .getByRole("button", { name: /Jordan Lee/ })
         .click();
-      await expect(page.locator(".account-button")).toBeVisible();
+      await expect(page.locator(".account-button")).toContainText("Jordan Lee");
+      await expect(page.locator(".account-popover")).not.toBeVisible();
+      assert.equal(
+        await page.evaluate(
+          async () => (await (await fetch("/api/state")).json()).user.id,
+        ),
+        "jordan",
+      );
       assert.equal(
         await page.evaluate(async () => {
           const r = await fetch("/api/tasks/RW-101", {
@@ -176,7 +183,9 @@ test(
         .locator(".account-popover")
         .getByRole("button", { name: /Alex Morgan/ })
         .click();
-      await expect(page.locator(".account-button")).toBeVisible();
+      await expect(page.locator(".account-button")).toContainText(
+        "Alex Morgan",
+      );
       await expect(page.locator(".account-popover")).not.toBeVisible();
       await page.screenshot({
         path: join(profile, "native-desktop.png"),
